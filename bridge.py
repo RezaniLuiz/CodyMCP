@@ -1,3 +1,23 @@
+# # SPDX-License-Identifier: GPL-3.0-or-later
+# bridge.py
+# ──────────────────────────────────────────────────────────────────────────
+#  CodyMCP Bridge
+#  Local WebSocket <-> Roblox Studio MCP server.
+#  The browser extension talks to this over ws://127.0.0.1:<PORT>.
+#
+#  What this bridge exposes to Kimi (aggregated into one tools/list):
+#    - Every MCP server declared in config.json (by default: roblox), each
+#      spawned as a stdio child and routed by tool name.
+#
+#  Design goals (robustness first):
+#   - Each MCP stdio process is read by ONE dedicated thread; responses are
+#     matched by JSON-RPC id (no "read the next line and hope" races).
+#   - stderr is drained so a child never blocks on a full pipe.
+#   - A dead server is auto-restarted and the failing call retried once.
+#   - Tool calls are locked PER SERVER, so a slow server never blocks another.
+#   - Every call ALWAYS produces a reply: a result OR a structured error.
+#     Nothing ever hangs the agentic loop silently.
+# ──────────────────────────────────────────────────────────────────────────
 import asyncio
 import json
 import os
@@ -12,6 +32,12 @@ try:
 except ImportError:
     print("[bridge] Missing dependency. Run:  pip install websockets")
     sys.exit(1)
+
+# Windows consoles often default to a legacy codepage (cp1252): printing
+# non-ASCII text then raises UnicodeEncodeError INSIDE the WS handler, which
+# kills the connection. Force UTF-8 (best effort). We also keep all console
+# output strictly ASCII (no arrows / dots) so nothing garbles on a console that
+# stayed on a legacy codepage anyway.
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -27,17 +53,18 @@ def _enable_ansi_colors():
     try:
         import ctypes
         k = ctypes.windll.kernel32
-        h = k.GetStdHandle(-11) 
+        h = k.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
         mode = ctypes.c_uint32()
         if not k.GetConsoleMode(h, ctypes.byref(mode)):
             return False
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
         return bool(k.SetConsoleMode(h, mode.value | 0x0004))
     except Exception:
         return False
 
 
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
+PORT = int(os.environ.get("CM_BRIDGE_PORT", "17613"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
@@ -47,6 +74,7 @@ if _enable_ansi_colors():
         "yl": "\033[93m", "rd": "\033[91m", "cy": "\033[96m",
     }
 else:
+    # Console can't do ANSI: drop colors entirely rather than print raw escapes.
     C = {k: "" for k in ("reset", "dim", "gr", "yl", "rd", "cy")}
 
 
@@ -54,7 +82,11 @@ def log(msg, color="dim"):
     ts = time.strftime("%H:%M:%S")
     print(f"{C['dim']}{ts}{C['reset']} {C.get(color,'')}{msg}{C['reset']}", flush=True)
 
+
+# Roblox Studio exposes its built-in MCP server on this loopback port. StudioMCP
+# (and our bridge, via it) reaches Studio through it.
 STUDIO_MCP_PORT = 13469
+
 
 def _port_owner(port):
     """(pid, name, path) of the process LISTENING on `port`, or None. Win32 only."""
@@ -97,10 +129,19 @@ def _port_owner(port):
 
 
 def check_studio_port():
+    """Warn (and optionally kill) a NON-Roblox process squatting Studio's MCP port.
+
+    A third-party tool (e.g. "ropilot") that binds 13469 before Studio does
+    hijacks the MCP channel: StudioMCP connects to IT instead of Studio, the
+    handshake succeeds but tools/list never answers -> the bridge sees 0 tools.
+    This is silent and brutal to diagnose, so we surface it up front.
+    """
     owner = _port_owner(STUDIO_MCP_PORT)
     if not owner:
         return False
     pid, name, path = owner
+    # The legitimate holder is Studio itself / a Roblox helper: its path lives
+    # under a "...\Roblox\..." folder. Anything else is an intruder.
     if "roblox" in (path or "").lower():
         return False
     where = path or name
@@ -116,13 +157,17 @@ def check_studio_port():
             subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                            capture_output=True, text=True, timeout=8)
             log(f"killed {name} (pid {pid}). Studio can use the port now.", "cy")
-            return True 
+            return True  # a squatter WAS killed -> Studio must reclaim the port
         except Exception as e:
             log(f"could not kill it: {e}", "rd")
     else:
         log("left it running. Close it yourself, then restart the bridge.", "yl")
     return False
 
+
+# ══════════════════════════════════════════════════════════════════════════
+#  HARDENED MCP CLIENT  (one per server in config.json)
+# ══════════════════════════════════════════════════════════════════════════
 class MCPClient:
     def __init__(self, server_id, command, args, env=None):
         self.id = server_id
@@ -132,8 +177,8 @@ class MCPClient:
         self.proc = None
         self.req_id = 1
         self.write_lock = threading.Lock()
-        self.call_lock = threading.Lock()   
-        self.pending = {}                   
+        self.call_lock = threading.Lock()   # serialize tool calls (single stdio pipe)
+        self.pending = {}                    # id -> queue.Queue (one slot)
         self.pend_lock = threading.Lock()
         self.tools_cache = []
         self.start_lock = threading.Lock()
@@ -148,11 +193,18 @@ class MCPClient:
             if self.is_alive():
                 return
             cmd = [self._resolve(self.command)] + [self._resolve(a) for a in self.args]
+            # A bare .py command (relative paths resolve against the bridge dir)
+            # is run with the SAME interpreter the bridge itself uses, so it works
+            # even on installs where only the `py` launcher exists (no `python`
+            # on PATH). This is how the Studio MCP launcher is wired by default.
             if cmd[0].lower().endswith(".py"):
                 script = cmd[0]
                 if not os.path.isabs(script):
                     script = os.path.join(HERE, script)
                 cmd = [sys.executable, script] + cmd[1:]
+            # On Windows, npx/npm/yarn/pnpm/bunx are .cmd shims that Popen can't
+            # launch directly (WinError 2). Run them through cmd.exe so any
+            # node-based MCP server "just works" from config.json.
             if sys.platform == "win32":
                 base = os.path.basename(cmd[0]).lower()
                 if base in ("npx", "npm", "yarn", "pnpm", "bunx"):
@@ -179,12 +231,20 @@ class MCPClient:
             self._reader_thread.start()
             threading.Thread(target=self._stderr_drain, args=(self.proc,), daemon=True).start()
 
+            # MCP handshake.
             self._request("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "zeroscript-bridge", "version": "1.0"},
+                "clientInfo": {"name": "codymcp-bridge", "version": "1.0"},
             }, timeout=30)
             self._notify("notifications/initialized")
+            # Some MCP servers (notably Roblox's StudioMCP) advertise 0 tools at
+            # the instant initialize returns, because they connect to their
+            # backend (the running Studio) a moment AFTER the stdio handshake.
+            # A single tools/list then caches an empty list forever. So if we
+            # get nothing, retry for a few seconds to let the backend attach.
+            # Short per-attempt timeout so the bridge never looks frozen if the
+            # server stays silent (e.g. Studio not open yet); ~12s total budget.
             for _ in range(12):
                 if self.refresh_tools(timeout=3):
                     break
@@ -217,6 +277,7 @@ class MCPClient:
                 pass
         self.proc = None
 
+    # ── io threads ────────────────────────────────────────────────────────
     def _reader(self, proc):
         stream = proc.stdout
         while True:
@@ -224,7 +285,7 @@ class MCPClient:
                 line = stream.readline()
             except Exception:
                 break
-            if line == "":
+            if line == "":  # EOF -> process exited
                 break
             line = line.strip()
             if not line:
@@ -232,10 +293,10 @@ class MCPClient:
             try:
                 msg = json.loads(line)
             except Exception:
-                continue  
+                continue  # stray non-JSON log on stdout
             mid = msg.get("id")
             if mid is None:
-                continue  
+                continue  # server notification, nothing waits on it
             with self.pend_lock:
                 q = self.pending.get(mid)
             if q is not None:
@@ -258,6 +319,7 @@ class MCPClient:
         except Exception:
             pass
 
+    # ── jsonrpc ───────────────────────────────────────────────────────────
     def _next_id(self):
         with self.write_lock:
             rid = self.req_id
@@ -290,6 +352,7 @@ class MCPClient:
             with self.pend_lock:
                 self.pending.pop(rid, None)
 
+    # ── high-level ────────────────────────────────────────────────────────
     def refresh_tools(self, timeout=20):
         msg = self._request("tools/list", {}, timeout=timeout)
         if msg and "result" in msg:
@@ -322,10 +385,14 @@ class MCPClient:
                 text = json.dumps(content)[:4000]
             return {"text": text, "images": images}
 
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MANAGER  - aggregates every MCP server, routes by tool name.
+# ══════════════════════════════════════════════════════════════════════════
 class MCPManager:
     def __init__(self):
-        self.clients = {}          
-        self.index = {}            
+        self.clients = {}          # server_id -> MCPClient
+        self.index = {}            # advertised_name -> (holder, real_name)
         self.index_lock = threading.Lock()
 
     def load_config(self):
@@ -379,6 +446,7 @@ class MCPManager:
                 name = t.get("name")
                 advertised = name
                 with self.index_lock:
+                    # find the advertised key that maps to this (client, name)
                     for k, (holder, real) in self.index.items():
                         if holder is client and real == name:
                             advertised = k
@@ -392,6 +460,7 @@ class MCPManager:
         with self.index_lock:
             entry = self.index.get(name)
         if entry is None:
+            # Maybe a freshly added tool - rebuild once and retry.
             self.rebuild_index()
             with self.index_lock:
                 entry = self.index.get(name)
@@ -416,11 +485,32 @@ class MCPManager:
     def any_alive(self):
         return any(c.is_alive() for c in self.clients.values())
 
+
+# ══════════════════════════════════════════════════════════════════════════
+#  WEBSOCKET SERVER
+# ══════════════════════════════════════════════════════════════════════════
 mgr = MCPManager()
 clients = set()
 
+# ── Studio connectivity probe ──────────────────────────────────────────────
+# The MCP server process stays alive even when Roblox Studio is closed or its
+# MCP option is disabled - tool calls then return instantly with an "Unable to
+# find an active Studio instance" text. So "mcp_alive" alone is misleading.
+#
+# TWO LEVELS (validated live 2026-06):
+#  - list_roblox_studios: instant, side-effect-free. studios == [] means NO Studio
+#    is connected to the MCP (app closed, OR its "Studio as MCP Server" option is
+#    disabled - the two are indistinguishable at this layer). A non-empty list
+#    means a Studio app IS connected, BUT note its entry stays present (active:true)
+#    even when no place is open - only its "name" goes null. So presence != usable.
+#  - get_studio_state: tells whether a PLACE is actually loaded. With a place open
+#    it returns "Available DataModels: ..."; with the Studio on the home screen (or
+#    the active place closed) it returns "...doesn't have a place opened / previously
+#    active Studio has disconnected". That is the authoritative "place loaded" signal
+#    (same phrase the call path already recognises in core/main.js).
 STUDIO_PROBE_TOOL = "list_roblox_studios"
 STUDIO_STATE_TOOL = "get_studio_state"
+# Substrings get_studio_state emits when a Studio is connected but no place is open.
 NO_PLACE_MARKERS = ("doesn't have a place", "no place opened", "place opened",
                     "has disconnected", "no active studio")
 
@@ -433,6 +523,7 @@ def _probe_tool_text(tool):
     if entry is None:
         return None
     holder, real_name = entry
+    # Never queue behind a long-running tool call (the probe is best-effort).
     if not holder.call_lock.acquire(blocking=False):
         return None
     try:
@@ -466,6 +557,7 @@ def probe_studio():
         return {"app": None, "place": None}
     if not studios:
         return {"app": False, "place": False}
+    # A Studio app is connected - now check whether a place is actually open.
     state = _probe_tool_text(STUDIO_STATE_TOOL)
     if state is None:
         return {"app": True, "place": None}
@@ -592,7 +684,7 @@ async def studio_watch(initial_app):
 
 
 async def main():
-    print(f"\n{C['cy']}  ZeroScript Bridge{C['reset']}  {C['dim']}- Roblox Studio - ws://{HOST}:{PORT}{C['reset']}\n")
+    print(f"\n{C['cy']}  CodyMCP Bridge{C['reset']}  {C['dim']}- Roblox Studio - ws://{HOST}:{PORT}{C['reset']}\n")
     killed_squatter = await asyncio.to_thread(check_studio_port)
     mgr.load_config()
     try:
@@ -601,6 +693,15 @@ async def main():
         log(f"server startup error: {e}", "rd")
         log("The bridge will keep running; it retries on the first tool call.", "yl")
     total = len(mgr.list_tools())
+
+    # A tool count alone only proves StudioMCP (the proxy) is up - it advertises
+    # its catalogue even with NO Studio attached. The authoritative "a Studio is
+    # actually connected" signal is the list_roblox_studios probe. So we probe
+    # FIRST and only show the green "ready" line when Studio is really attached;
+    # otherwise we show just the corrective step (no misleading green success).
+    # Probe even when total == 0: StudioMCP advertises an EMPTY catalogue when
+    # Studio's MCP server toggle is off (or no place is open), so 0 tools is the
+    # most common "needs a corrective step" state, not a success.
     _st = await asyncio.to_thread(probe_studio)
     if total == 0 or _st["app"] is False:
         log("    -------------------------------------------------------------", "yl")
@@ -609,10 +710,13 @@ async def main():
         else:
             log(f"    {total} tools loaded, but NO Roblox Studio is connected yet.", "yl")
         if killed_squatter:
+            # A squatter was holding the port; Studio could not bind and may have
+            # given up. It must reclaim the port now -> toggle is the reliable fix.
             log("    Another app was blocking the port (now killed). To finish:", "yl")
             log("    in Roblox Studio, turn the MCP server OFF then ON again", "yl")
             log("    (Studio AI / MCP setting).", "yl")
         else:
+            # No squatter: Studio is simply closed, or its MCP option is off.
             log("    Open Roblox Studio (with a place) and enable its MCP server", "yl")
             log("    (Studio AI / MCP setting), if it is not already on.", "yl")
         log("    It can take up to ~10s; the extension's status dot turns green", "yl")
@@ -626,7 +730,7 @@ async def main():
     async with websockets.serve(handler, HOST, PORT, ping_interval=20, ping_timeout=20, max_size=16 * 1024 * 1024):
         log(f"listening on ws://{HOST}:{PORT}  - load the extension and open a supported AI chat", "cy")
         asyncio.create_task(studio_watch(_st["app"]))
-        await asyncio.Future() 
+        await asyncio.Future()  # run forever
 
 
 if __name__ == "__main__":

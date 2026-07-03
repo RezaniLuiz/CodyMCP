@@ -6,9 +6,11 @@
 **CodyMCP** is a free browser extension that turns DeepSeek, Gemini, Kimi, GLM, Qwen or Arena into a Roblox Studio AI agent.
 Control Roblox Studio with AI directly from your browser - read/edit scripts, run Luau, generate assets, all from a normal AI chat. No API key, no terminal, no coding needed.
 
+Six AI providers are supported: **DeepSeek** (chat.deepseek.com, recommended), **Google Gemini** (gemini.google.com), **Kimi** (kimi.com, Moonshot AI), **GLM** (chat.z.ai, Z.ai), **Qwen** (chat.qwen.ai) and **Arena** (arena.ai, a multi-model playground). Gemini and Kimi can be unstable: Gemini tends to stop using the Roblox tools in long sessions, and Kimi sometimes uses its own native tools instead of the Roblox commands. On Arena, use **Direct** mode (CodyMCP only supports Direct; it blocks Start in Battle / Side-by-Side / Agent modes). DeepSeek is the recommended provider.
+
 > 💬 **Stuck? Join the [Discord community](https://discord.gg/RXdhzPy2cW)** get help, share feedback, and follow updates.
 
-> *Also known as: CodyMCP Roblox, CodyMCP free download, Roblox DeepSeek agent, Roblox Gemini agent, Roblox Kimi agent, Roblox GLM agent, Roblox Qwen agent, Roblox Arena agent, Roblox Studio AI automation, Luau AI, MCP Roblox, lemonade alternative free, lemonade.gg alternative, free Roblox AI agent, free lemonade roblox alternative*
+> *Also known as: ZeroScript Roblox, ZeroScript free download, Roblox DeepSeek agent, Roblox Gemini agent, Roblox Kimi agent, Roblox GLM agent, Roblox Qwen agent, Roblox Arena agent, Roblox Studio AI automation, Luau AI, MCP Roblox, lemonade alternative free, lemonade.gg alternative, free Roblox AI agent, free lemonade roblox alternative*
 ## How it works
 
 ```
@@ -50,6 +52,19 @@ Go to https://chat.deepseek.com (recommended), https://gemini.google.com, https:
 > Only works on chat.deepseek.com, gemini.google.com, kimi.com, chat.z.ai, chat.qwen.ai and arena.ai - it will not work on any other site.
 > On Arena, keep the mode dropdown on **Direct** - CodyMCP blocks Start in Battle / Side-by-Side / Agent modes (it only drives a single Direct reply).
 > Gemini and Kimi can be unstable (model behavior, not the extension): Gemini may stop using the Roblox tools after a while, and Kimi may use its own native tools instead. If the AI starts answering in plain text instead of acting, remind it to use the commands or start a new session.
+### 5. Watch the setup tutorial
+
+[Watch the setup tutorial on YouTube](https://youtu.be/kPKiZLZ9_Ps)
+
+## What the AI can do
+
+- Read and edit scripts
+- Run Luau code directly in Studio
+- Inspect the game tree and instances
+- Generate meshes, materials, and models
+- Browse and insert from the Creator Store
+- Control play-testing
+- **Remember your project across sessions** persistent project memory saved inside your place
 
 ## Panel status
 
@@ -68,6 +83,6 @@ Go to https://chat.deepseek.com (recommended), https://gemini.google.com, https:
 
 ## Support
 
-CodyMCP is free. If it saves you time share with your friends !
+CodyMCP is free. For support, join our Discord: https://discord.gg/RXdhzPy2cW
 
-> Credits to ZeroScript for the Core and the OpenSourced Project
+> Credits for the basecode to ScriptZero
