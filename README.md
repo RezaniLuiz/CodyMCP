@@ -52,9 +52,6 @@ Go to https://chat.deepseek.com (recommended), https://gemini.google.com, https:
 > Only works on chat.deepseek.com, gemini.google.com, kimi.com, chat.z.ai, chat.qwen.ai and arena.ai - it will not work on any other site.
 > On Arena, keep the mode dropdown on **Direct** - CodyMCP blocks Start in Battle / Side-by-Side / Agent modes (it only drives a single Direct reply).
 > Gemini and Kimi can be unstable (model behavior, not the extension): Gemini may stop using the Roblox tools after a while, and Kimi may use its own native tools instead. If the AI starts answering in plain text instead of acting, remind it to use the commands or start a new session.
-### 5. Watch the setup tutorial
-
-[Watch the setup tutorial on YouTube](https://youtu.be/kPKiZLZ9_Ps)
 
 ## What the AI can do
 
