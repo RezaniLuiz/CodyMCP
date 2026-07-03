@@ -10,7 +10,6 @@ Six AI providers are supported: **DeepSeek** (chat.deepseek.com, recommended), *
 
 > 💬 **Stuck? Join the [Discord community](https://discord.gg/RXdhzPy2cW)** get help, share feedback, and follow updates.
 
-> *Also known as: ZeroScript Roblox, ZeroScript free download, Roblox DeepSeek agent, Roblox Gemini agent, Roblox Kimi agent, Roblox GLM agent, Roblox Qwen agent, Roblox Arena agent, Roblox Studio AI automation, Luau AI, MCP Roblox, lemonade alternative free, lemonade.gg alternative, free Roblox AI agent, free lemonade roblox alternative*
 ## How it works
 
 ```
@@ -82,4 +81,4 @@ Go to https://chat.deepseek.com (recommended), https://gemini.google.com, https:
 
 CodyMCP is free. For support, join our Discord: https://discord.gg/RXdhzPy2cW
 
-> Credits for the basecode to ScriptZero
+-# Credits for the basecode to ScriptZero
