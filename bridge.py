@@ -64,7 +64,7 @@ def _enable_ansi_colors():
 
 
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("CM_BRIDGE_PORT", "17613"))
+PORT = int(os.environ.get("ZS_BRIDGE_PORT", "17613"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
@@ -235,7 +235,7 @@ class MCPClient:
             self._request("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "codymcp-bridge", "version": "1.0"},
+                "clientInfo": {"name": "CodyMCP-bridge", "version": "1.0"},
             }, timeout=30)
             self._notify("notifications/initialized")
             # Some MCP servers (notably Roblox's StudioMCP) advertise 0 tools at

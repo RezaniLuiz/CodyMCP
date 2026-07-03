@@ -101,7 +101,7 @@ echo  ############################################################
 echo  ##                                                        ##
 echo  ##   KEEP THIS TERMINAL OPEN - DO NOT CLOSE THIS WINDOW   ##
 echo  ##                                                        ##
-echo  ##   CodyMCP stops working if you close it. Just          ##
+echo  ##   CodyMCP stops working if you close it. Just       ##
 echo  ##   minimize this window and leave it running.           ##
 echo  ##                                                        ##
 echo  ############################################################
